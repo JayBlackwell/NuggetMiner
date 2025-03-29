@@ -16,7 +16,6 @@ if "gemini_response" not in st.session_state:
 def extract_audio(video_file):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as audio_temp:
         video = VideoFileClip(video_file.name)
-        # Compress audio to avoid exceeding Whisper's 25MB limit
         video.audio.write_audiofile(audio_temp.name, codec='libmp3lame', bitrate="64k")
         return audio_temp.name
 
@@ -98,7 +97,8 @@ uploaded_file = st.file_uploader(
     accept_multiple_files=False
 )
 
-if uploaded_file and openai_api_key and gemini_api_key:
+# ✅ Conditionally require only needed API keys
+if uploaded_file and gemini_api_key and (input_mode == "Transcript File" or openai_api_key):
     st.info("Processing input...")
 
     if st.session_state.transcript is None:
@@ -159,5 +159,5 @@ if uploaded_file and openai_api_key and gemini_api_key:
         )
 
 else:
-    st.warning("Please upload a file and enter both API keys.")
+    st.warning("Please upload a file and enter the required API key(s).")
 
