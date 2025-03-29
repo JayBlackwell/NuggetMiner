@@ -66,8 +66,18 @@ st.set_page_config(page_title="NuggetMiner", layout="wide")
 st.title("🜚 NuggetMiner: Customer Testimonial Extractor")
 
 st.sidebar.header("🔐 API Keys")
-openai_api_key = st.sidebar.text_input("OpenAI Whisper API Key", type="password")
-gemini_api_key = st.sidebar.text_input("Google Gemini API Key", type="password")
+
+openai_api_key = st.sidebar.text_input(
+    "🔑 OpenAI Whisper API Key", 
+    type="password", 
+    help="Used for transcribing audio via OpenAI's Whisper API"
+)
+
+gemini_api_key = st.sidebar.text_input(
+    "🔑 Google Gemini API Key", 
+    type="password", 
+    help="Used for extracting insights with Gemini 2.5"
+)
 
 input_mode = st.sidebar.radio("Choose Input Type", ["Video File", "Transcript File"])
 
