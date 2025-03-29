@@ -12,11 +12,12 @@ if "transcript" not in st.session_state:
 if "gemini_response" not in st.session_state:
     st.session_state.gemini_response = None
 
-# --- Audio extraction ---
+# --- Audio extraction (with compression for Whisper API limit) ---
 def extract_audio(video_file):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as audio_temp:
         video = VideoFileClip(video_file.name)
-        video.audio.write_audiofile(audio_temp.name, codec='libmp3lame')
+        # Compress audio to avoid exceeding Whisper's 25MB limit
+        video.audio.write_audiofile(audio_temp.name, codec='libmp3lame', bitrate="64k")
         return audio_temp.name
 
 # --- Whisper via OpenAI API ---
