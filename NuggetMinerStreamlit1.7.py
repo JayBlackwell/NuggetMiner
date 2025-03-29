@@ -1,43 +1,32 @@
 import streamlit as st
-import whisper
+import openai
 from moviepy.video.io.VideoFileClip import VideoFileClip
 import google.generativeai as genai
 import tempfile
 import os
 import time
 
-# --- Initialize session state ---
+# --- Session state init ---
 if "transcript" not in st.session_state:
     st.session_state.transcript = None
 if "gemini_response" not in st.session_state:
     st.session_state.gemini_response = None
 
-# --- Utilities ---
+# --- Audio extraction ---
 def extract_audio(video_file):
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as audio_temp:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as audio_temp:
         video = VideoFileClip(video_file.name)
-        video.audio.write_audiofile(audio_temp.name, codec='pcm_s16le')
+        video.audio.write_audiofile(audio_temp.name, codec='libmp3lame')
         return audio_temp.name
 
-def format_timestamp(seconds):
-    mins = int(seconds // 60)
-    secs = int(seconds % 60)
-    millis = int((seconds % 1) * 1000)
-    return f"{mins:02}:{secs:02}.{millis:03}"
+# --- Whisper via OpenAI API ---
+def transcribe_with_openai(audio_path, api_key):
+    openai.api_key = api_key
+    with open(audio_path, "rb") as audio_file:
+        transcript = openai.Audio.transcribe("whisper-1", audio_file)
+    return transcript["text"]
 
-def transcribe_audio(audio_path):
-    model = whisper.load_model("base")
-    result = model.transcribe(audio_path, verbose=False)
-
-    lines = []
-    for segment in result["segments"]:
-        start = format_timestamp(segment["start"])
-        end = format_timestamp(segment["end"])
-        text = segment["text"].strip()
-        lines.append(f"[{start} --> {end}] {text}")
-    
-    return "\n".join(lines)
-
+# --- Transcript upload handling ---
 def load_transcript_text(uploaded_file):
     ext = os.path.splitext(uploaded_file.name)[1].lower()
     lines = uploaded_file.read().decode("utf-8").splitlines()
@@ -47,6 +36,7 @@ def load_transcript_text(uploaded_file):
         )
     return ""
 
+# --- Gemini Prompt ---
 def send_to_gemini(api_key, transcript_text):
     genai.configure(api_key=api_key)
     system_prompt = """
@@ -58,7 +48,7 @@ Your task is to review the webinar transcript and extract the most valuable cont
 * Positive quotes highlighting benefits
 * Stories that demonstrate real-world improvements
 
-Whenever possible, include the speaker's **full name**, not just their first name, when referencing quotes or insights.
+Whenever possible, include the speaker's full name, not just their first name, when referencing quotes or insights.
 
 Focus on content that can be repurposed for marketing materials, social media, emails, or case studies.
 """
@@ -75,8 +65,10 @@ Focus on content that can be repurposed for marketing materials, social media, e
 st.set_page_config(page_title="NuggetMiner", layout="wide")
 st.title("🜚 NuggetMiner: Customer Testimonial Extractor")
 
-st.sidebar.header("🜚 Gemini Config")
-api_key = st.sidebar.text_input("Google Gemini API Key", type="password")
+st.sidebar.header("🔐 API Keys")
+openai_api_key = st.sidebar.text_input("OpenAI Whisper API Key", type="password")
+gemini_api_key = st.sidebar.text_input("Google Gemini API Key", type="password")
+
 input_mode = st.sidebar.radio("Choose Input Type", ["Video File", "Transcript File"])
 
 uploaded_file = st.file_uploader(
@@ -85,38 +77,34 @@ uploaded_file = st.file_uploader(
     accept_multiple_files=False
 )
 
-if uploaded_file and api_key:
+if uploaded_file and openai_api_key and gemini_api_key:
     st.info("Processing input...")
 
-    # Load transcript (if not already done)
     if st.session_state.transcript is None:
         if input_mode == "Video File" and uploaded_file.type.startswith("video"):
             with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_video:
                 temp_video.write(uploaded_file.read())
                 temp_video.flush()
 
-                with st.status("🔍 Processing Video...", expanded=True) as status:
-                    st.write("📁 Step 1: Extracting audio from video...")
+                with st.status("🜚 Processing Video...", expanded=True) as status:
+                    st.write("🜚 Step 1: Extracting audio from video...")
                     audio_path = extract_audio(temp_video)
 
-                    st.write("📝 Step 2: Transcribing with Whisper model...")
+                    st.write("🜚 Step 2: Sending audio to OpenAI Whisper API...")
                     progress_bar = st.progress(0)
 
-                    for i in range(60):
-                        time.sleep(0.03)
-                        progress_bar.progress(i + 1)
-
-                    transcript = transcribe_audio(audio_path)
-
-                    for i in range(60, 100):
+                    for i in range(80):
                         time.sleep(0.01)
                         progress_bar.progress(i + 1)
 
-                    st.write("✅ Transcription complete.")
-                    status.update(label="✅ Whisper Processing Complete!", state="complete")
-                    st.toast("Transcription ready to review ✅")
+                    transcript = transcribe_with_openai(audio_path, openai_api_key)
+
+                    for i in range(80, 100):
+                        time.sleep(0.01)
+                        progress_bar.progress(i + 1)
 
                     st.session_state.transcript = transcript
+                    st.toast("Transcription complete ✅")
                     os.remove(audio_path)
 
         elif input_mode == "Transcript File":
@@ -127,21 +115,19 @@ if uploaded_file and api_key:
             st.error("Invalid file type.")
             st.stop()
 
-    # Display transcript
     transcript = st.session_state.transcript
     st.subheader("🜚 Transcript Preview")
     st.text_area("Transcript", transcript, height=300)
 
-    # Generate with Gemini
-    if st.button("🜚 Mine transcript for Nuggets"):
-        st.session_state.gemini_response = None  # Reset previous output
-        with st.spinner("Gemini is mining for marketing gold..."):
-            gemini_response = send_to_gemini(api_key, transcript)
+    if st.button("🜚 Mine for Nuggets"):
+        st.session_state.gemini_response = None
+        with st.spinner("We are mining for marketing gold..."):
+            gemini_response = send_to_gemini(gemini_api_key, transcript)
             st.session_state.gemini_response = gemini_response
             st.toast("Gemini has spoken 💎")
 
     if st.session_state.gemini_response:
-        st.subheader("🜚 Gold Strikes")
+        st.subheader("🜚 Nuggets Found")
         st.text_area("Marketing Nuggets", st.session_state.gemini_response, height=400)
 
         st.download_button(
@@ -152,5 +138,5 @@ if uploaded_file and api_key:
         )
 
 else:
-    st.warning("Please upload a file and enter your API key.")
+    st.warning("Please upload a file and enter both API keys.")
 
