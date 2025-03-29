@@ -26,9 +26,18 @@ def transcribe_with_openai(audio_path, api_key):
     with open(audio_path, "rb") as audio_file:
         transcript = client.audio.transcriptions.create(
             model="whisper-1",
-            file=audio_file
+            file=audio_file,
+            response_format="verbose_json"  # <-- this gives us timestamps
         )
-    return transcript.text
+
+    # Format transcript with timestamps
+    lines = []
+    for segment in transcript.segments:
+        start = time.strftime('%H:%M:%S', time.gmtime(segment["start"]))
+        end = time.strftime('%H:%M:%S', time.gmtime(segment["end"]))
+        lines.append(f"[{start} --> {end}] {segment['text'].strip()}")
+    return "\n".join(lines)
+
 
 # --- Transcript upload handling ---
 def load_transcript_text(uploaded_file):
