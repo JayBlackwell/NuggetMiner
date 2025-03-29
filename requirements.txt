@@ -1,0 +1,8 @@
+streamlit>=1.30.0
+openai-whisper
+moviepy
+google-generativeai>=0.3.2
+ffmpeg-python
+torch  # whisper dependency
+numpy  # required by moviepy
+
