@@ -11,6 +11,8 @@ if "transcript" not in st.session_state:
     st.session_state.transcript = None
 if "gemini_response" not in st.session_state:
     st.session_state.gemini_response = None
+if "uploaded_filename" not in st.session_state:
+    st.session_state.uploaded_filename = None
 
 # --- Audio extraction ---
 def extract_audio(video_file):
@@ -26,14 +28,24 @@ def transcribe_with_openai(audio_path, api_key):
         transcript = client.audio.transcriptions.create(
             model="whisper-1",
             file=audio_file,
-            response_format="text"
+            response_format="verbose_json"
         )
-    return transcript
+    lines = []
+    for segment in transcript.segments:
+        start = time.strftime('%H:%M:%S', time.gmtime(segment.start))
+        end = time.strftime('%H:%M:%S', time.gmtime(segment.end))
+        lines.append(f"[{start} --> {end}] {segment.text.strip()}")
+    return "\n".join(lines)
 
 # --- Transcript upload handling ---
 def load_transcript_text(uploaded_file):
     ext = os.path.splitext(uploaded_file.name)[1].lower()
-    return uploaded_file.read().decode("utf-8")
+    lines = uploaded_file.read().decode("utf-8").splitlines()
+    if ext in [".txt", ".vtt", ".srt"]:
+        return "\n".join(
+            line.strip() for line in lines if line.strip() and not line.strip().isdigit()
+        )
+    return ""
 
 # --- Gemini Prompt ---
 def send_to_gemini(api_key, transcript_text):
@@ -64,19 +76,26 @@ Focus on content that can be repurposed for marketing materials, social media, e
 st.set_page_config(page_title="NuggetMiner", layout="wide")
 st.title("🜚 NuggetMiner: Customer Testimonial Extractor")
 
-st.sidebar.header("🛈 API Keys")
+st.sidebar.header("🔐 API Keys")
 openai_api_key = st.sidebar.text_input(
-    "🔑 OpenAI Whisper API Key", 
-    type="password", 
+    "🔑 OpenAI Whisper API Key",
+    type="password",
     help="Used for transcribing audio via OpenAI's Whisper API"
 )
+
 gemini_api_key = st.sidebar.text_input(
-    "🔑 Google Gemini API Key", 
-    type="password", 
+    "🔑 Google Gemini API Key",
+    type="password",
     help="Used for extracting insights with Gemini 2.5"
 )
 
 input_mode = st.sidebar.radio("Choose Input Type", ["Video File", "Transcript File"])
+
+if st.button("🔁 Submit Another"):
+    st.session_state.transcript = None
+    st.session_state.gemini_response = None
+    st.session_state.uploaded_filename = None
+    st.rerun()
 
 uploaded_file = st.file_uploader(
     "Upload your video or transcript",
@@ -85,73 +104,68 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file:
-    if (input_mode == "Video File" and (not openai_api_key or not gemini_api_key)) or \
-       (input_mode == "Transcript File" and not gemini_api_key):
-        st.warning("Please enter the required API key(s).")
-    else:
-        st.info("Processing input...")
+    st.session_state.uploaded_filename = uploaded_file.name
 
-        if st.session_state.transcript is None:
-            if input_mode == "Video File" and uploaded_file.type.startswith("video"):
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_video:
-                    temp_video.write(uploaded_file.read())
-                    temp_video.flush()
+if uploaded_file and gemini_api_key and (input_mode == "Transcript File" or openai_api_key):
+    st.info("Processing input...")
 
-                    with st.status("🜚 Processing Video...", expanded=True) as status:
-                        st.write("🜚 Step 1: Extracting audio from video...")
-                        audio_path = extract_audio(temp_video)
+    if st.session_state.transcript is None:
+        if input_mode == "Video File" and uploaded_file.type.startswith("video"):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_video:
+                temp_video.write(uploaded_file.read())
+                temp_video.flush()
 
-                        st.write("🜚 Step 2: Sending audio to OpenAI Whisper API...")
-                        progress_bar = st.progress(0)
+                with st.status("🜚 Processing Video...", expanded=True) as status:
+                    st.write("🜚 Step 1: Extracting audio from video...")
+                    audio_path = extract_audio(temp_video)
 
-                        for i in range(60):
-                            time.sleep(0.01)
-                            progress_bar.progress(i + 1)
+                    st.write("🜚 Step 2: Sending audio to OpenAI Whisper API...")
+                    progress_bar = st.progress(0)
 
-                        transcript = transcribe_with_openai(audio_path, openai_api_key)
+                    for i in range(80):
+                        time.sleep(0.01)
+                        progress_bar.progress(i + 1)
 
-                        for i in range(60, 100):
-                            time.sleep(0.01)
-                            progress_bar.progress(i + 1)
+                    transcript = transcribe_with_openai(audio_path, openai_api_key)
 
-                        st.session_state.transcript = transcript
-                        st.toast("Transcription complete ✅")
-                        os.remove(audio_path)
+                    for i in range(80, 100):
+                        time.sleep(0.01)
+                        progress_bar.progress(i + 1)
 
-            elif input_mode == "Transcript File":
-                st.session_state.transcript = load_transcript_text(uploaded_file)
-                st.toast("Transcript loaded ✅")
-            else:
-                st.error("Invalid file type.")
-                st.stop()
+                    st.session_state.transcript = transcript
+                    st.toast("Transcription complete ✅")
+                    os.remove(audio_path)
 
-if st.session_state.transcript:
+        elif input_mode == "Transcript File":
+            st.session_state.transcript = load_transcript_text(uploaded_file)
+            st.toast("Transcript loaded ✅")
+
+        else:
+            st.error("Invalid file type.")
+            st.stop()
+
     transcript = st.session_state.transcript
-    st.subheader("🜚 Transcript Preview")
-    st.text_area("Transcript", transcript, height=300)
+    if transcript:
+        st.subheader("🜚 Transcript Preview")
+        st.text_area("Transcript", transcript, height=300)
 
-    if st.button("🜚 Mine for Nuggets"):
-        st.session_state.gemini_response = None
-        with st.spinner("We are mining for marketing gold..."):
-            gemini_response = send_to_gemini(gemini_api_key, transcript)
-            st.session_state.gemini_response = gemini_response
-            st.toast("Gemini has spoken 💎")
+        if st.button("🜚 Mine for Nuggets"):
+            st.session_state.gemini_response = None
+            with st.spinner("We are mining for marketing gold..."):
+                gemini_response = send_to_gemini(gemini_api_key, transcript)
+                st.session_state.gemini_response = gemini_response
+                st.toast("Gemini has spoken 💎")
 
-if st.session_state.gemini_response:
-    st.subheader("🜚 Nuggets Found")
-    st.text_area("Marketing Nuggets", st.session_state.gemini_response, height=400)
+        if st.session_state.gemini_response:
+            st.subheader("🜚 Nuggets Found")
+            st.text_area("Marketing Nuggets", st.session_state.gemini_response, height=400)
 
-    st.download_button(
-        label="🜚 Download Nuggets",
-        data=st.session_state.gemini_response,
-        file_name="nugget_output.txt",
-        mime="text/plain"
-    )
-
-# Option to Submit Another
-if st.session_state.transcript or st.session_state.gemini_response:
-    if st.button("🔁 Submit Another"):
-        st.session_state.transcript = None
-        st.session_state.gemini_response = None
-        st.rerun()
+            st.download_button(
+                label="🜚 Download Nuggets",
+                data=st.session_state.gemini_response,
+                file_name="nugget_output.txt",
+                mime="text/plain"
+            )
+else:
+    st.warning("Please upload a file and enter the required API keys.")
 
