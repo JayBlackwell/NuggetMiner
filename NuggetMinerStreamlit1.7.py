@@ -1,5 +1,5 @@
 import streamlit as st
-import openai
+from openai import OpenAI
 from moviepy.video.io.VideoFileClip import VideoFileClip
 import google.generativeai as genai
 import tempfile
@@ -21,10 +21,13 @@ def extract_audio(video_file):
 
 # --- Whisper via OpenAI API ---
 def transcribe_with_openai(audio_path, api_key):
-    openai.api_key = api_key
+    client = OpenAI(api_key=api_key)
     with open(audio_path, "rb") as audio_file:
-        transcript = openai.Audio.transcribe("whisper-1", audio_file)
-    return transcript["text"]
+        transcript = client.audio.transcriptions.create(
+            model="whisper-1",
+            file=audio_file
+        )
+    return transcript.text
 
 # --- Transcript upload handling ---
 def load_transcript_text(uploaded_file):
