@@ -6,6 +6,7 @@ import tempfile
 import os
 import time
 import ffmpeg
+from pydub import AudioSegment
 
 # --- Session state init ---
 if "transcript" not in st.session_state:
@@ -32,29 +33,46 @@ def extract_audio(video_file):
 
         return output_path
 
-# --- Whisper via OpenAI API ---
+# --- Whisper via OpenAI API with chunking ---
 def transcribe_with_openai(audio_path, api_key):
     max_size_mb = 25
-    file_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
-    if file_size_mb > max_size_mb:
-        st.error(f"❌ Audio file is {file_size_mb:.2f}MB and exceeds OpenAI's 25MB limit.")
-        return None
-
     client = OpenAI(api_key=api_key)
-    with open(audio_path, "rb") as audio_file:
-        try:
-            transcript = client.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio_file,
-                response_format="verbose_json"
-            )
-        except Exception as e:
-            st.error("❌ OpenAI Whisper API failed. See details below.")
-            st.exception(e)
-            return None
+    audio = AudioSegment.from_file(audio_path)
+    chunk_length_ms = 5 * 60 * 1000  # 5 minutes
+    chunks = [audio[i:i+chunk_length_ms] for i in range(0, len(audio), chunk_length_ms)]
+
+    all_segments = []
+    current_offset = 0.0
+
+    for idx, chunk in enumerate(chunks):
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_chunk:
+            chunk.export(temp_chunk.name, format="mp3")
+            chunk_size_mb = os.path.getsize(temp_chunk.name) / (1024 * 1024)
+            if chunk_size_mb > max_size_mb:
+                st.error(f"❌ Chunk {idx+1} is {chunk_size_mb:.2f}MB and exceeds OpenAI's 25MB limit.")
+                return None
+
+            try:
+                with open(temp_chunk.name, "rb") as audio_file:
+                    response = client.audio.transcriptions.create(
+                        model="whisper-1",
+                        file=audio_file,
+                        response_format="verbose_json"
+                    )
+                    for segment in response.segments:
+                        segment["start"] += current_offset
+                        segment["end"] += current_offset
+                        all_segments.append(segment)
+                current_offset += chunk.duration_seconds
+            except Exception as e:
+                st.error(f"❌ OpenAI Whisper API failed on chunk {idx+1}.")
+                st.exception(e)
+                return None
+            finally:
+                os.remove(temp_chunk.name)
 
     lines = []
-    for segment in transcript.segments:
+    for segment in all_segments:
         start = time.strftime('%H:%M:%S', time.gmtime(segment['start']))
         end = time.strftime('%H:%M:%S', time.gmtime(segment['end']))
         lines.append(f"[{start} --> {end}] {segment['text'].strip()}")
@@ -194,3 +212,4 @@ if uploaded_file and gemini_api_key and (input_mode == "Transcript File" or open
             )
 else:
     st.warning("Please upload a file and enter the required API keys.")
+
