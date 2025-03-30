@@ -5,6 +5,7 @@ import google.generativeai as genai
 import tempfile
 import os
 import time
+import ffmpeg
 
 # --- Session state init ---
 if "transcript" not in st.session_state:
@@ -14,22 +15,44 @@ if "gemini_response" not in st.session_state:
 if "uploaded_filename" not in st.session_state:
     st.session_state.uploaded_filename = None
 
-# --- Audio extraction ---
+# --- Audio extraction with compression ---
 def extract_audio(video_file):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as audio_temp:
-        video = VideoFileClip(video_file.name)
-        video.audio.write_audiofile(audio_temp.name, codec='libmp3lame')
-        return audio_temp.name
+        input_path = video_file.name
+        output_path = audio_temp.name
+
+        # Compress audio to mono, 16kHz, 64k bitrate
+        ffmpeg.input(input_path).output(
+            output_path,
+            acodec='libmp3lame',
+            audio_bitrate='64k',
+            ac=1,
+            ar=16000
+        ).run(quiet=True, overwrite_output=True)
+
+        return output_path
 
 # --- Whisper via OpenAI API ---
 def transcribe_with_openai(audio_path, api_key):
+    max_size_mb = 25
+    file_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
+    if file_size_mb > max_size_mb:
+        st.error(f"❌ Audio file is {file_size_mb:.2f}MB and exceeds OpenAI's 25MB limit.")
+        return None
+
     client = OpenAI(api_key=api_key)
     with open(audio_path, "rb") as audio_file:
-        transcript = client.audio.transcriptions.create(
-            model="whisper-1",
-            file=audio_file,
-            response_format="verbose_json"
-        )
+        try:
+            transcript = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file,
+                response_format="verbose_json"
+            )
+        except Exception as e:
+            st.error("❌ OpenAI Whisper API failed. See details below.")
+            st.exception(e)
+            return None
+
     lines = []
     for segment in transcript.segments:
         start = time.strftime('%H:%M:%S', time.gmtime(segment['start']))
@@ -120,6 +143,8 @@ if uploaded_file and gemini_api_key and (input_mode == "Transcript File" or open
                     audio_path = extract_audio(temp_video)
 
                     st.write("🜚 Step 2: Sending audio to OpenAI Whisper API...")
+                    size_mb = os.path.getsize(audio_path) / 1024 / 1024
+                    st.write(f"🔎 Compressed audio size: {size_mb:.2f}MB")
                     progress_bar = st.progress(0)
 
                     for i in range(80):
@@ -132,8 +157,9 @@ if uploaded_file and gemini_api_key and (input_mode == "Transcript File" or open
                         time.sleep(0.01)
                         progress_bar.progress(i + 1)
 
-                    st.session_state.transcript = transcript
-                    st.toast("Transcription complete ✅")
+                    if transcript:
+                        st.session_state.transcript = transcript
+                        st.toast("Transcription complete ✅")
                     os.remove(audio_path)
 
         elif input_mode == "Transcript File":
@@ -168,4 +194,3 @@ if uploaded_file and gemini_api_key and (input_mode == "Transcript File" or open
             )
 else:
     st.warning("Please upload a file and enter the required API keys.")
-
