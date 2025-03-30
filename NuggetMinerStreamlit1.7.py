@@ -5,7 +5,6 @@ import google.generativeai as genai
 import tempfile
 import os
 import time
-import ffmpeg
 from pydub import AudioSegment
 
 # --- Session state init ---
@@ -16,22 +15,18 @@ if "gemini_response" not in st.session_state:
 if "uploaded_filename" not in st.session_state:
     st.session_state.uploaded_filename = None
 
-# --- Audio extraction with compression ---
+# --- Audio extraction using moviepy (cloud-friendly) ---
 def extract_audio(video_file):
+    from moviepy.editor import VideoFileClip
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as audio_temp:
-        input_path = video_file.name
-        output_path = audio_temp.name
-
-        # Compress audio to mono, 16kHz, 64k bitrate
-        ffmpeg.input(input_path).output(
-            output_path,
-            acodec='libmp3lame',
-            audio_bitrate='64k',
-            ac=1,
-            ar=16000
-        ).run(quiet=True, overwrite_output=True)
-
-        return output_path
+        video = VideoFileClip(video_file.name)
+        video.audio.write_audiofile(
+            audio_temp.name,
+            codec="libmp3lame",
+            bitrate="64k",
+            ffmpeg_params=["-ac", "1", "-ar", "16000"]
+        )
+        return audio_temp.name
 
 # --- Whisper via OpenAI API with chunking ---
 def transcribe_with_openai(audio_path, api_key):
@@ -212,4 +207,5 @@ if uploaded_file and gemini_api_key and (input_mode == "Transcript File" or open
             )
 else:
     st.warning("Please upload a file and enter the required API keys.")
+
 
