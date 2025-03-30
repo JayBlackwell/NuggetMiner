@@ -32,9 +32,9 @@ def transcribe_with_openai(audio_path, api_key):
         )
     lines = []
     for segment in transcript.segments:
-        start = time.strftime('%H:%M:%S', time.gmtime(segment.start))
-        end = time.strftime('%H:%M:%S', time.gmtime(segment.end))
-        lines.append(f"[{start} --> {end}] {segment.text.strip()}")
+        start = time.strftime('%H:%M:%S', time.gmtime(segment['start']))
+        end = time.strftime('%H:%M:%S', time.gmtime(segment['end']))
+        lines.append(f"[{start} --> {end}] {segment['text'].strip()}")
     return "\n".join(lines)
 
 # --- Transcript upload handling ---
@@ -92,9 +92,9 @@ gemini_api_key = st.sidebar.text_input(
 input_mode = st.sidebar.radio("Choose Input Type", ["Video File", "Transcript File"])
 
 if st.button("🔁 Submit Another"):
-    st.session_state.transcript = None
-    st.session_state.gemini_response = None
-    st.session_state.uploaded_filename = None
+    for key in ["transcript", "gemini_response", "uploaded_filename"]:
+        if key in st.session_state:
+            del st.session_state[key]
     st.rerun()
 
 uploaded_file = st.file_uploader(
