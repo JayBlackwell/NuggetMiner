@@ -292,7 +292,7 @@ Example Output:
 # Streamlit UI
 # --------------------------
 st.set_page_config(page_title="NuggetMiner", layout="wide")
-st.title("💎 NuggetMiner: Customer Testimonial Extractor")
+st.title("🜚 NuggetMiner: Customer Testimonial Extractor")
 st.caption("Upload a webinar video (MP4) or transcript (TXT, VTT, SRT) to extract marketing gold!")
 
 # Sidebar for controls
@@ -326,7 +326,7 @@ with st.sidebar:
         st.rerun() # Rerun the script
 
     st.divider()
-    st.info("NuggetMiner v1.6 (Clear Fix 2)") # Updated version
+    st.info("NuggetMiner v1") # Updated version
 
 # Main area for file upload and results
 st.header("📤 Upload Your File")
@@ -412,13 +412,13 @@ if uploaded_file is not None:
         transcript = st.session_state.get("transcript")
         if transcript is not None and transcript.strip():
             # ... (Display transcript and Gemini button/results logic as before) ...
-            st.subheader("📜 Transcript Preview")
+            st.subheader("🜚 Transcript Preview")
             st.text_area("Transcript Text", transcript, height=300, key="transcript_display")
             st.write("---")
             if gemini_ready:
-                 if st.button("💎 Mine for Nuggets", key="mine_button"):
+                 if st.button("🜚 Mine for Nuggets", key="mine_button"):
                      st.session_state.gemini_response = None
-                     with st.spinner("🧠 Asking Gemini to find the marketing gold..."):
+                     with st.spinner("🜚 Asking Gemini to find the marketing gold..."):
                          gemini_response_text = send_to_gemini(gemini_api_key, transcript)
                          st.session_state.gemini_response = gemini_response_text
                          if gemini_response_text and not gemini_response_text.startswith("Error:"):
