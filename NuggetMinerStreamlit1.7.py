@@ -76,7 +76,7 @@ def extract_audio_chunks(video_path):
     return chunk_paths
 
 
-# --- Whisper via OpenAI API with chunking (Includes httpx Debugging) ---
+# --- via OpenAI API with chunking (Includes httpx Debugging) ---
 def transcribe_with_openai_chunks(chunk_paths, api_key):
     """Transcribes audio chunks using OpenAI Whisper API, explicitly disabling proxies."""
     custom_http_client = None
@@ -299,7 +299,7 @@ st.caption("Upload a webinar video (MP4) or transcript (TXT, VTT, SRT) to extrac
 with st.sidebar:
     st.header("🔐 API Keys")
     openai_api_key = st.text_input(
-        "🔑 OpenAI Whisper API Key", type="password", help="Required for transcribing video files."
+        "🔑 OpenAI API Key", type="password", help="Required for transcribing video files."
     )
     gemini_api_key = st.text_input(
         "🔑 Google Gemini API Key", type="password", help="Required for analyzing the transcript."
