@@ -208,4 +208,3 @@ if uploaded_file and gemini_api_key and (input_mode == "Transcript File" or open
 else:
     st.warning("Please upload a file and enter the required API keys.")
 
-
