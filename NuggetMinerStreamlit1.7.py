@@ -1,11 +1,10 @@
 import streamlit as st
 import openai
-from moviepy.video.io.VideoFileClip import VideoFileClip
+from moviepy.editor import VideoFileClip, AudioFileClip
 import google.generativeai as genai
 import tempfile
 import os
 import time
-from pydub import AudioSegment
 
 # --- Session state init ---
 if "transcript" not in st.session_state:
@@ -15,56 +14,53 @@ if "gemini_response" not in st.session_state:
 if "uploaded_filename" not in st.session_state:
     st.session_state.uploaded_filename = None
 
-# --- Audio extraction using moviepy (cloud-friendly) ---
-def extract_audio(video_file):
-    from moviepy.editor import VideoFileClip
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as audio_temp:
-        video = VideoFileClip(video_file.name)
-        video.audio.write_audiofile(
-            audio_temp.name,
-            codec="libmp3lame",
-            bitrate="64k",
-            ffmpeg_params=["-ac", "1", "-ar", "16000"]
-        )
-        return audio_temp.name
+# --- Audio extraction and chunking using moviepy ---
+def extract_audio_chunks(video_path):
+    video = VideoFileClip(video_path)
+    audio = video.audio
+    audio_duration = audio.duration  # in seconds
+
+    chunk_paths = []
+    chunk_length = 300  # seconds (5 minutes)
+    start = 0
+
+    while start < audio_duration:
+        end = min(start + chunk_length, audio_duration)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_audio:
+            audio.subclip(start, end).write_audiofile(
+                temp_audio.name,
+                codec="libmp3lame",
+                bitrate="64k",
+                ffmpeg_params=["-ac", "1", "-ar", "16000"]
+            )
+            chunk_paths.append((temp_audio.name, start))
+        start += chunk_length
+
+    return chunk_paths
 
 # --- Whisper via OpenAI API with chunking ---
-def transcribe_with_openai(audio_path, api_key):
-    max_size_mb = 25
+def transcribe_with_openai_chunks(chunk_paths, api_key):
     openai.api_key = api_key
-    audio = AudioSegment.from_file(audio_path)
-    chunk_length_ms = 5 * 60 * 1000  # 5 minutes
-    chunks = [audio[i:i+chunk_length_ms] for i in range(0, len(audio), chunk_length_ms)]
-
     all_segments = []
-    current_offset = 0.0
 
-    for idx, chunk in enumerate(chunks):
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_chunk:
-            chunk.export(temp_chunk.name, format="mp3")
-            chunk_size_mb = os.path.getsize(temp_chunk.name) / (1024 * 1024)
-            if chunk_size_mb > max_size_mb:
-                st.error(f"❌ Chunk {idx+1} is {chunk_size_mb:.2f}MB and exceeds OpenAI's 25MB limit.")
-                return None
-
-            try:
-                with open(temp_chunk.name, "rb") as audio_file:
-                    response = openai.audio.transcriptions.create(
-                        model="whisper-1",
-                        file=audio_file,
-                        response_format="verbose_json"
-                    )
-                    for segment in response.segments:
-                        segment["start"] += current_offset
-                        segment["end"] += current_offset
-                        all_segments.append(segment)
-                current_offset += chunk.duration_seconds
-            except Exception as e:
-                st.error(f"❌ OpenAI Whisper API failed on chunk {idx+1}.")
-                st.exception(e)
-                return None
-            finally:
-                os.remove(temp_chunk.name)
+    for idx, (chunk_path, offset) in enumerate(chunk_paths):
+        try:
+            with open(chunk_path, "rb") as audio_file:
+                response = openai.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=audio_file,
+                    response_format="verbose_json"
+                )
+                for segment in response.segments:
+                    segment["start"] += offset
+                    segment["end"] += offset
+                    all_segments.append(segment)
+        except Exception as e:
+            st.error(f"❌ OpenAI Whisper API failed on chunk {idx+1}.")
+            st.exception(e)
+            return None
+        finally:
+            os.remove(chunk_path)
 
     lines = []
     for segment in all_segments:
@@ -152,20 +148,12 @@ if uploaded_file and gemini_api_key and (input_mode == "Transcript File" or open
                 temp_video.flush()
 
                 with st.status("🜚 Processing Video...", expanded=True) as status:
-                    st.write("🜚 Step 1: Extracting audio from video...")
-                    audio_path = extract_audio(temp_video)
+                    st.write("🜚 Step 1: Extracting audio chunks from video...")
+                    chunk_paths = extract_audio_chunks(temp_video.name)
 
-                    st.write("🜚 Step 2: Sending audio to OpenAI Whisper API...")
-                    size_mb = os.path.getsize(audio_path) / 1024 / 1024
-                    st.write(f"🔎 Compressed audio size: {size_mb:.2f}MB")
+                    st.write("🜚 Step 2: Sending chunks to OpenAI Whisper API...")
                     progress_bar = st.progress(0)
-
-                    for i in range(80):
-                        time.sleep(0.01)
-                        progress_bar.progress(i + 1)
-
-                    transcript = transcribe_with_openai(audio_path, openai_api_key)
-
+                    transcript = transcribe_with_openai_chunks(chunk_paths, openai_api_key)
                     for i in range(80, 100):
                         time.sleep(0.01)
                         progress_bar.progress(i + 1)
@@ -173,7 +161,6 @@ if uploaded_file and gemini_api_key and (input_mode == "Transcript File" or open
                     if transcript:
                         st.session_state.transcript = transcript
                         st.toast("Transcription complete ✅")
-                    os.remove(audio_path)
 
         elif input_mode == "Transcript File":
             st.session_state.transcript = load_transcript_text(uploaded_file)
