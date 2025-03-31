@@ -264,7 +264,7 @@ Example Output:
 *   [Around 00:28:45] A speaker highlighted how the special order tracking saved them hours each week.
 """
         model = genai.GenerativeModel(
-             model_name="gemini-1.5-flash", system_instruction=system_prompt
+             model_name="gemini-2.5-pro-exp-03-25", system_instruction=system_prompt
         )
         response = model.generate_content(
             transcript_text, generation_config={"temperature": 0.7}
