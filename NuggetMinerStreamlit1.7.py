@@ -328,7 +328,7 @@ Focus *only* on content that can be directly repurposed for marketing materials,
 # Streamlit UI
 # --------------------------
 st.set_page_config(page_title="NuggetMiner", layout="wide")
-st.title("💎 NuggetMiner: Customer Testimonial Extractor")
+st.title("🜚 NuggetMiner: Customer Testimonial Extractor")
 st.caption("Upload a webinar video (MP4) or transcript (TXT, VTT, SRT) to extract marketing gold!")
 
 # Place API keys and input selection in the sidebar
@@ -457,9 +457,9 @@ if uploaded_file is not None:
 
             if gemini_ready:
                 # Only show the button if we have a transcript
-                if st.button("💎 Mine for Nuggets", key="mine_button"):
+                if st.button("🜚 Mine for Nuggets", key="mine_button"):
                     st.session_state.gemini_response = None # Reset before calling
-                    with st.spinner("🧠 Asking Gemini to find the marketing gold..."):
+                    with st.spinner("🜚 Asking Gemini to find the marketing gold..."):
                         gemini_response_text = send_to_gemini(gemini_api_key, transcript)
                         st.session_state.gemini_response = gemini_response_text # Store result/error
                         if gemini_response_text and not gemini_response_text.startswith("Error:"):
@@ -472,7 +472,7 @@ if uploaded_file is not None:
 
             if st.session_state.get("gemini_response"):
                 is_error_response = st.session_state.gemini_response.startswith("Error:")
-                st.subheader("✨ Nuggets Found!" if not is_error_response else "⚠️ Gemini Response")
+                st.subheader("🜚 Nuggets Found!" if not is_error_response else "⚠️ Gemini Response")
                 st.text_area("Marketing Nuggets" if not is_error_response else "Gemini Output",
                              st.session_state.gemini_response,
                              height=400,
