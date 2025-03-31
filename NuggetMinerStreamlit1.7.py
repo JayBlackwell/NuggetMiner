@@ -446,7 +446,7 @@ if uploaded_file is not None:
         st.write("---")
         st.warning(f"☝️ Please ensure prerequisites are met for the selected '{current_input_mode}' mode:")
         if current_input_mode == "Video File":
-             if not whisper_ready: st.error("   - OpenAI Whisper API key is missing.")
+             if not whisper_ready: st.error("   - OpenAI API key is missing.")
              if not gemini_ready: st.error("   - Google Gemini API key is missing.")
         elif current_input_mode == "Transcript File":
               if not gemini_ready: st.error("   - Google Gemini API key is missing.")
