@@ -1,12 +1,13 @@
 import streamlit as st
 from openai import OpenAI
-import httpx # <-- Import httpx
-import pkg_resources # <-- Import pkg_resources for version checking
+import httpx # For custom client
+import pkg_resources # For version checking
 from moviepy.editor import VideoFileClip
 import google.generativeai as genai
 import tempfile
 import os
 import time
+import re # <-- Import regular expressions for VTT/SRT parsing
 
 # --- Session state init ---
 if "transcript" not in st.session_state:
@@ -81,7 +82,7 @@ def extract_audio_chunks(video_path):
     return chunk_paths
 
 
-# --- Whisper via OpenAI API with chunking (Revised with httpx Debugging) ---
+# --- Whisper via OpenAI API with chunking (Includes httpx Debugging) ---
 def transcribe_with_openai_chunks(chunk_paths, api_key):
     """Transcribes audio chunks using OpenAI Whisper API, explicitly disabling proxies."""
 
@@ -131,7 +132,6 @@ def transcribe_with_openai_chunks(chunk_paths, api_key):
 
         # Attempt 2: Initialize with proxies=None and timeout
         st.write("Attempt 2: Initializing httpx.Client(proxies=None, timeout=60.0)...")
-        # This is the line that previously failed
         custom_http_client = httpx.Client(proxies=None, timeout=60.0)
         st.write("Attempt 2 SUCCESSFUL. Custom httpx client created (proxies disabled).")
         st.write("--- End httpx Debug ---")
@@ -146,7 +146,6 @@ def transcribe_with_openai_chunks(chunk_paths, api_key):
             try:
                 if os.path.exists(chunk_path): os.remove(chunk_path)
             except OSError: pass
-        # Ensure client is closed if partially created before error
         if custom_http_client:
             try: custom_http_client.close()
             except: pass # Ignore errors during close in error path
@@ -211,11 +210,15 @@ def transcribe_with_openai_chunks(chunk_paths, api_key):
                      st.warning(f"No segments returned for chunk {current_chunk_number}.")
 
                 for segment in segments:
-                    segment_start = segment.get('start', 0) + offset
-                    segment_end = segment.get('end', 0) + offset
+                    # Use segment start/end directly, add chunk offset
+                    segment_start_abs = segment.get('start', 0) + offset
+                    segment_end_abs = segment.get('end', 0) + offset
                     segment_text = segment.get('text', '').strip()
-                    start_str = time.strftime('%H:%M:%S', time.gmtime(segment_start))
-                    end_str = time.strftime('%H:%M:%S', time.gmtime(segment_end))
+
+                    # Format timestamp (HH:MM:SS) using absolute times
+                    start_str = time.strftime('%H:%M:%S', time.gmtime(segment_start_abs))
+                    end_str = time.strftime('%H:%M:%S', time.gmtime(segment_end_abs))
+
                     all_formatted_lines.append(f"[{start_str} --> {end_str}] {segment_text}")
                 st.write(f"Chunk {current_chunk_number} transcribed successfully.")
 
@@ -259,21 +262,75 @@ def transcribe_with_openai_chunks(chunk_paths, api_key):
                 st.warning(f"Error closing httpx client: {e_close}")
 
 
-# --- Transcript upload handling ---
+# --- Transcript upload handling (Revised for VTT/SRT) ---
 def load_transcript_text(uploaded_file):
-    """Reads transcript from uploaded file, cleaning basic formatting."""
+    """
+    Reads transcript from VTT/SRT, preserving and reformatting timestamps,
+    or reads plain text from TXT files.
+    """
     try:
+        file_name = uploaded_file.name
+        file_ext = os.path.splitext(file_name)[1].lower()
+
         content_bytes = uploaded_file.read()
         encoding = 'utf-8-sig' if content_bytes.startswith(b'\xef\xbb\xbf') else 'utf-8'
         content = content_bytes.decode(encoding)
         lines = content.splitlines()
-        cleaned_lines = [
-            line.strip() for line in lines
-            if line.strip() and not line.strip().isdigit() and '-->' not in line
-        ]
-        return "\n".join(cleaned_lines)
+
+        output_lines = []
+
+        if file_ext in ['.vtt', '.srt']:
+            st.write(f"Parsing {file_ext} file format...")
+            i = 0
+            while i < len(lines):
+                line = lines[i].strip()
+
+                # Skip empty lines, WEBVTT/SRT headers/notes, sequence numbers
+                if not line or line.upper() == "WEBVTT" or line.isdigit() or line.upper().startswith("NOTE"):
+                    i += 1
+                    continue
+
+                # Check for timestamp line
+                # Regex to capture HH:MM:SS parts primarily
+                match = re.search(r'(\d{2}:\d{2}:\d{2})\.?\d* --> (\d{2}:\d{2}:\d{2})\.?\d*', line)
+                if match:
+                    start_time = match.group(1) # HH:MM:SS
+                    end_time = match.group(2)   # HH:MM:SS
+
+                    # Look for the text on the next line(s) until a blank line or new timestamp/sequence
+                    text_parts = []
+                    i += 1 # Move to the potential first line of text
+                    while i < len(lines) and lines[i].strip() and '-->' not in lines[i] and not lines[i].strip().isdigit():
+                        text_parts.append(lines[i].strip())
+                        i += 1
+
+                    full_text = " ".join(text_parts)
+                    if full_text:
+                         output_lines.append(f"[{start_time} --> {end_time}] {full_text}")
+                    # If no text was found, 'i' is already incremented past the timestamp.
+                    # The outer loop will continue from line 'i'.
+                    continue # Important: continue the outer while loop
+
+                # If it wasn't a blank line, header, sequence number, or timestamp line,
+                # it might be unexpected content; we'll just skip it for now.
+                i += 1
+            st.write(f"Finished parsing {file_ext}. Found {len(output_lines)} segments.")
+
+        elif file_ext == '.txt':
+            st.write("Processing plain .txt file...")
+            # For TXT, just return non-empty lines (original behavior without timestamp removal)
+            output_lines = [line.strip() for line in lines if line.strip()]
+
+        else:
+            # Should not happen due to file_uploader type constraints, but good practice
+            st.warning(f"Unsupported file extension for direct transcript loading: {file_ext}")
+            return "" # Return empty string for unsupported types
+
+        return "\n".join(output_lines)
+
     except Exception as e:
-        st.error(f"Error reading or processing transcript file: {e}")
+        st.error(f"Error reading or processing transcript file '{uploaded_file.name}': {e}")
+        st.exception(e) # Show traceback in logs/streamlit report
         return None
 
 
@@ -292,9 +349,13 @@ Your task is to review the webinar transcript and extract the most valuable cont
 * Stories that demonstrate real-world improvements or problem-solving using the product.
 * Key feature mentions that received positive reactions or detailed explanations.
 
-Whenever possible, include the speaker's full name (if mentioned near the quote in the transcript) when referencing quotes or insights. If the name isn't clear, attribute it generically (e.g., "A speaker mentioned...").
+Whenever possible, include the speaker's full name (if mentioned near the quote in the transcript) when referencing quotes or insights. If the name isn't clear, attribute it generically (e.g., "A speaker mentioned..."). Reference the approximate time using the start timestamp provided in the transcript (e.g., "[Around 00:05:30] John Doe mentioned...").
 
-Focus *only* on content that can be directly repurposed for marketing materials, social media posts, email snippets, or case study elements. Avoid generic introductions, filler words, or off-topic discussions. Format the output clearly, perhaps using bullet points for each extracted nugget.
+Focus *only* on content that can be directly repurposed for marketing materials, social media posts, email snippets, or case study elements. Avoid generic introductions, filler words, or off-topic discussions. Format the output clearly, perhaps using bullet points for each extracted nugget, including the timestamp reference.
+
+Example Output Format:
+* [Around 00:15:10] Jane Smith: "The Golf Shop product dramatically reduced our inventory reconciliation time."
+* [Around 00:28:45] A speaker highlighted how the special order tracking saved them hours each week.
 """
         model = genai.GenerativeModel(
              model_name="gemini-1.5-flash", # Or try "gemini-1.5-pro" / other available models
@@ -328,7 +389,7 @@ Focus *only* on content that can be directly repurposed for marketing materials,
 # Streamlit UI
 # --------------------------
 st.set_page_config(page_title="NuggetMiner", layout="wide")
-st.title("🜚 NuggetMiner: Customer Testimonial Extractor")
+st.title("💎 NuggetMiner: Customer Testimonial Extractor")
 st.caption("Upload a webinar video (MP4) or transcript (TXT, VTT, SRT) to extract marketing gold!")
 
 # Place API keys and input selection in the sidebar
@@ -367,7 +428,7 @@ with st.sidebar:
 st.header("📤 Upload Your File")
 uploaded_file = st.file_uploader(
     f"Upload your {input_mode.lower()}", # Dynamic label
-    type=["mp4", "txt", "vtt", "srt"],
+    type=["mp4", "txt", "vtt", "srt"], # Ensure VTT and SRT are allowed
     accept_multiple_files=False,
     key="file_uploader"
 )
@@ -388,7 +449,7 @@ if uploaded_file is not None:
     gemini_ready = bool(gemini_api_key)
     whisper_ready = bool(openai_api_key)
     can_process_video = input_mode == "Video File" and whisper_ready and gemini_ready
-    can_process_transcript = input_mode == "Transcript File" and gemini_ready
+    can_process_transcript = input_mode == "Transcript File" and gemini_ready # No Whisper key needed for transcript mode
 
     if (can_process_video or can_process_transcript):
 
@@ -399,6 +460,9 @@ if uploaded_file is not None:
 
             try:
                 if input_mode == "Video File" and uploaded_file.type.startswith("video"):
+                    if not whisper_ready: # Double check key needed for this path
+                         st.error("OpenAI API Key is required for video processing.")
+                         st.stop()
                     st.info("Processing video file...")
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_video:
                         temp_video.write(uploaded_file.getvalue())
@@ -427,14 +491,16 @@ if uploaded_file is not None:
                             st.stop()
 
                 elif input_mode == "Transcript File":
-                     st.info("Loading transcript file...")
+                     st.info(f"Loading transcript file: {uploaded_file.name}")
                      with st.spinner("Reading transcript..."):
+                        # Use the revised load_transcript_text function
                         transcript_text = load_transcript_text(uploaded_file)
                         if transcript_text is not None:
                              st.session_state.transcript = transcript_text
                              st.toast("Transcript loaded ✅")
                         else:
-                             st.error("Failed to load transcript from file.")
+                             # Error handled within load_transcript_text
+                             st.error("Failed to load or parse transcript from file.")
                              st.stop()
 
             finally:
@@ -449,30 +515,33 @@ if uploaded_file is not None:
         # --- Step 2: Display Transcript and Process with Gemini ---
         transcript = st.session_state.get("transcript")
 
+        # Display transcript if it exists and has content
         if transcript is not None and transcript.strip():
             st.subheader("📜 Transcript Preview")
             st.text_area("Transcript Text", transcript, height=300, key="transcript_display")
 
             st.write("---")
 
+            # Allow Gemini processing only if transcript exists and key is provided
             if gemini_ready:
-                # Only show the button if we have a transcript
-                if st.button("🜚 Mine for Nuggets", key="mine_button"):
+                if st.button("💎 Mine for Nuggets", key="mine_button"):
                     st.session_state.gemini_response = None # Reset before calling
-                    with st.spinner("🜚 Asking Gemini to find the marketing gold..."):
+                    with st.spinner("🧠 Asking Gemini to find the marketing gold..."):
+                        # Update Gemini prompt to leverage timestamps if needed
+                        # (The current prompt asks it to reference them)
                         gemini_response_text = send_to_gemini(gemini_api_key, transcript)
                         st.session_state.gemini_response = gemini_response_text # Store result/error
                         if gemini_response_text and not gemini_response_text.startswith("Error:"):
                             st.toast("Gemini analysis complete! ✨")
                         else:
                              st.toast("Gemini analysis finished (potential issues found).", icon="⚠️")
-            elif transcript:
+            else: # No Gemini key, but we have a transcript
                  st.warning("☝️ Enter your Google Gemini API key in the sidebar to analyze this transcript.")
 
-
+            # Display Gemini results if they exist in session state
             if st.session_state.get("gemini_response"):
                 is_error_response = st.session_state.gemini_response.startswith("Error:")
-                st.subheader("🜚 Nuggets Found!" if not is_error_response else "⚠️ Gemini Response")
+                st.subheader("✨ Nuggets Found!" if not is_error_response else "⚠️ Gemini Response")
                 st.text_area("Marketing Nuggets" if not is_error_response else "Gemini Output",
                              st.session_state.gemini_response,
                              height=400,
@@ -488,7 +557,7 @@ if uploaded_file is not None:
         elif st.session_state.get("transcript") is not None: # Transcript exists but is empty/whitespace
              st.warning("The generated or loaded transcript appears to be empty or contains only whitespace.")
         elif new_upload: # Only show processing message if it's a new file and transcript is still None
-             st.info("Processing transcript... Please wait.")
+             st.info("Processing input... Please wait.")
 
 
     else:
@@ -508,4 +577,4 @@ elif not uploaded_file:
 
 # Add a footer or version in the sidebar
 st.sidebar.divider()
-st.sidebar.info("NuggetMiner v1.3 (httpx debug)")
+st.sidebar.info("NuggetMiner v1.4 (VTT/SRT Parse)")
