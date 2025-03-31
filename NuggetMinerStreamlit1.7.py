@@ -1,7 +1,8 @@
 import streamlit as st
 from openai import OpenAI
 import httpx # <-- Import httpx
-from moviepy.editor import VideoFileClip # Removed AudioFileClip if not used directly
+import pkg_resources # <-- Import pkg_resources for version checking
+from moviepy.editor import VideoFileClip
 import google.generativeai as genai
 import tempfile
 import os
@@ -19,120 +20,169 @@ if "uploaded_filename" not in st.session_state:
 def extract_audio_chunks(video_path):
     """Extracts audio from video, saves as chunks, returns paths."""
     chunk_paths = []
+    video = None
+    audio = None
     try:
         st.write("Opening video file...")
         video = VideoFileClip(video_path)
         audio = video.audio
         if audio is None:
             st.error("Could not extract audio from the video.")
-            if video: video.close() # Ensure video object is closed
+            if video: video.close()
             return []
-        audio_duration = audio.duration  # in seconds
+        audio_duration = audio.duration
         st.write(f"Audio duration: {audio_duration:.2f} seconds")
 
-        chunk_length = 300  # seconds (5 minutes) - adjust if needed
+        chunk_length = 300
         start = 0
         idx = 1
 
         while start < audio_duration:
             end = min(start + chunk_length, audio_duration)
             st.write(f"Processing chunk {idx}: {start:.2f}s to {end:.2f}s")
-            # Use a unique name to avoid potential conflicts in high concurrency
             with tempfile.NamedTemporaryFile(delete=False, suffix=f"_chunk{idx}.mp3", prefix="audio_") as temp_audio:
-                temp_audio_path = temp_audio.name # Get path before potential close/error
+                temp_audio_path = temp_audio.name
                 try:
-                    # Write audio chunk
                     audio.subclip(start, end).write_audiofile(
                         temp_audio_path,
                         codec="libmp3lame",
                         bitrate="64k",
-                        ffmpeg_params=["-ac", "1", "-ar", "16000"], # Mono, 16kHz sample rate
-                        logger=None # Suppress excessive moviepy logging if desired
+                        ffmpeg_params=["-ac", "1", "-ar", "16000"],
+                        logger=None
                     )
                     chunk_paths.append((temp_audio_path, start))
                     st.write(f"Saved chunk {idx} to {os.path.basename(temp_audio_path)}")
                 except Exception as e:
                     st.error(f"Error writing audio chunk {idx}: {e}")
-                    # Attempt to clean up the failed chunk file
-                    if os.path.exists(temp_audio_path):
-                         os.remove(temp_audio_path)
-                    # Clean up previously successful chunks
-                    for path, _ in chunk_paths:
+                    if os.path.exists(temp_audio_path): os.remove(temp_audio_path)
+                    for path, _ in chunk_paths: # Clean up previously successful chunks
                         if os.path.exists(path): os.remove(path)
-                    # Close moviepy objects before returning
                     if audio: audio.close()
                     if video: video.close()
-                    return [] # Return empty list indicating failure
+                    return []
 
             start += chunk_length
             idx += 1
 
-        # Close video and audio objects to release resources
-        if audio: audio.close()
-        if video: video.close()
         st.write("Audio extraction complete.")
 
     except Exception as e:
         st.error(f"Error during video processing or audio extraction: {e}")
-        # Clean up any chunks that might have been created before the error
-        for path, _ in chunk_paths:
+        for path, _ in chunk_paths: # Clean up any created chunks
             if os.path.exists(path):
                 try: os.remove(path)
-                except OSError: pass # Ignore errors during cleanup
-        # Ensure moviepy objects are closed on general error
-        if 'audio' in locals() and audio: audio.close()
-        if 'video' in locals() and video: video.close()
-        return [] # Return empty list
+                except OSError: pass
+        return []
+    finally:
+        # Ensure moviepy objects are closed
+        if audio: audio.close()
+        if video: video.close()
 
     return chunk_paths
 
 
-# --- Whisper via OpenAI API with chunking (Revised with Custom httpx Client) ---
+# --- Whisper via OpenAI API with chunking (Revised with httpx Debugging) ---
 def transcribe_with_openai_chunks(chunk_paths, api_key):
     """Transcribes audio chunks using OpenAI Whisper API, explicitly disabling proxies."""
 
-    # Initialize custom_http_client to None
+    # Initialize variables
     custom_http_client = None
     client = None
 
+    # --- Debugging httpx Initialization ---
+    st.write("--- Starting httpx Debug ---")
     try:
-        # Create a custom httpx client that ignores environment proxies
+        # Check httpx version
         try:
-            custom_http_client = httpx.Client(proxies=None, timeout=60.0) # Explicitly disable proxies, set timeout
-            st.write("Custom httpx client created (proxies disabled).")
-        except Exception as e:
-            st.error("❌ Failed to create custom httpx client.")
-            st.exception(e)
-            # Clean up chunks before returning
+            httpx_version = pkg_resources.get_distribution("httpx").version
+            st.write(f"Detected httpx version: {httpx_version}")
+        except pkg_resources.DistributionNotFound:
+            st.warning("Could not automatically detect httpx version.")
+        except Exception as e_ver:
+            st.warning(f"Error detecting httpx version: {e_ver}")
+
+        # Check httpcore version (dependency of httpx)
+        try:
+            httpcore_version = pkg_resources.get_distribution("httpcore").version
+            st.write(f"Detected httpcore version: {httpcore_version}")
+        except pkg_resources.DistributionNotFound:
+            st.warning("Could not automatically detect httpcore version.")
+        except Exception as e_ver_core:
+            st.warning(f"Error detecting httpcore version: {e_ver_core}")
+
+
+        # Attempt 1: Simplest httpx Client initialization
+        st.write("Attempt 1: Initializing httpx.Client() with no arguments...")
+        try:
+            minimal_client = httpx.Client()
+            st.write("Attempt 1 SUCCESSFUL.")
+            minimal_client.close() # Close immediately, just testing creation
+        except Exception as e_minimal:
+            st.error(f"Attempt 1 FAILED: httpx.Client() raised an error.")
+            st.exception(e_minimal) # Show full traceback for this attempt
+            st.write("--- End httpx Debug ---")
+             # Clean up chunks before returning
             for chunk_path, _ in chunk_paths:
                 try:
                     if os.path.exists(chunk_path): os.remove(chunk_path)
                 except OSError: pass
             return None
 
+
+        # Attempt 2: Initialize with proxies=None and timeout
+        st.write("Attempt 2: Initializing httpx.Client(proxies=None, timeout=60.0)...")
+        # This is the line that previously failed
+        custom_http_client = httpx.Client(proxies=None, timeout=60.0)
+        st.write("Attempt 2 SUCCESSFUL. Custom httpx client created (proxies disabled).")
+        st.write("--- End httpx Debug ---")
+
+    except Exception as e:
+        # This will catch the error primarily from Attempt 2 if it fails
+        st.error(f"❌ Failed during httpx client creation attempts (most likely Attempt 2).")
+        st.exception(e)
+        st.write("--- End httpx Debug ---")
+        # Clean up chunks before returning
+        for chunk_path, _ in chunk_paths:
+            try:
+                if os.path.exists(chunk_path): os.remove(chunk_path)
+            except OSError: pass
+        # Ensure client is closed if partially created before error
+        if custom_http_client:
+            try: custom_http_client.close()
+            except: pass # Ignore errors during close in error path
+        return None # Exit because httpx client creation failed
+
+    # --- End Debugging httpx Initialization ---
+
+
+    # Proceed only if custom_http_client was created successfully in Attempt 2
+    try:
         # Instantiate the OpenAI client using the custom httpx client
         try:
             client = OpenAI(
                 api_key=api_key,
-                http_client=custom_http_client # <-- Pass the custom client here
+                http_client=custom_http_client # Pass the custom client here
             )
             st.write("OpenAI client initialized with custom httpx client.")
-        except Exception as e:
+        except Exception as e_openai:
             st.error("❌ Failed to initialize OpenAI client even with custom httpx client.")
-            st.exception(e)
-            # Clean up chunks before returning
+            st.exception(e_openai)
+            # Clean up chunks
             for chunk_path, _ in chunk_paths:
                 try:
                     if os.path.exists(chunk_path): os.remove(chunk_path)
                 except OSError: pass
-            return None # Return None as OpenAI client init failed
+            # Need to return None here, finally block will close the httpx client
+            return None
+
 
         # --- Main Transcription Loop ---
         all_formatted_lines = []
         total_chunks = len(chunk_paths)
         if total_chunks == 0:
             st.warning("No audio chunks provided for transcription.")
-            return "" # Return empty string if no chunks
+            # No transcription needed, return empty string. Finally block will close client.
+            return ""
 
         progress_bar = st.progress(0, text="Initializing transcription...")
         processed_chunks = 0
@@ -140,15 +190,12 @@ def transcribe_with_openai_chunks(chunk_paths, api_key):
         for idx, (chunk_path, offset) in enumerate(chunk_paths):
             current_chunk_number = idx + 1
             progress_text = f"Transcribing chunk {current_chunk_number}/{total_chunks}..."
-            # Update progress at the start of processing each chunk
             progress_bar.progress(processed_chunks / total_chunks, text=progress_text)
             st.write(f"Sending chunk {current_chunk_number} ({os.path.basename(chunk_path)}) to Whisper...")
 
             try:
                 if not os.path.exists(chunk_path):
                     st.error(f"Chunk file {chunk_path} not found. Skipping.")
-                    # Consider if skipping should count towards progress or not.
-                    # Here, we'll let the progress update naturally on the next successful chunk.
                     continue
 
                 with open(chunk_path, "rb") as audio_file:
@@ -172,9 +219,7 @@ def transcribe_with_openai_chunks(chunk_paths, api_key):
                     all_formatted_lines.append(f"[{start_str} --> {end_str}] {segment_text}")
                 st.write(f"Chunk {current_chunk_number} transcribed successfully.")
 
-                # Increment processed count ONLY after successful processing
                 processed_chunks += 1
-                # Update progress bar again *after* successful processing
                 progress_bar.progress(processed_chunks / total_chunks, text=progress_text)
 
             except Exception as e:
@@ -187,7 +232,8 @@ def transcribe_with_openai_chunks(chunk_paths, api_key):
                     try:
                         if os.path.exists(path_to_remove): os.remove(path_to_remove)
                     except OSError: pass
-                return None # Stop processing
+                # Return None, finally block will close the httpx client
+                return None
             finally:
                 # Ensure *this* chunk file is always removed after processing attempt
                 try:
@@ -200,13 +246,17 @@ def transcribe_with_openai_chunks(chunk_paths, api_key):
         time.sleep(1.5) # Keep message visible
         progress_bar.empty() # Clear the progress bar
 
+        # Return result, finally block will close the httpx client
         return "\n".join(all_formatted_lines)
 
     finally:
         # IMPORTANT: Close the custom httpx client if it was created
         if custom_http_client:
-            custom_http_client.close()
-            st.write("Custom httpx client closed.")
+            try:
+                custom_http_client.close()
+                st.write("Custom httpx client closed.")
+            except Exception as e_close:
+                st.warning(f"Error closing httpx client: {e_close}")
 
 
 # --- Transcript upload handling ---
@@ -258,16 +308,15 @@ Focus *only* on content that can be directly repurposed for marketing materials,
         if response and hasattr(response, 'text'):
             return response.text
         elif response and hasattr(response, 'prompt_feedback'):
-             st.warning(f"Gemini content generation might be blocked: {response.prompt_feedback}")
-             # Try to access candidate information if available
-             safety_ratings = None
-             if response.candidates and response.candidates[0].safety_ratings:
-                 safety_ratings = response.candidates[0].safety_ratings
-             return f"Error: Content generation blocked by safety settings. Feedback: {response.prompt_feedback}. Ratings: {safety_ratings}"
+             safety_ratings_str = "N/A"
+             try: # Safely access safety ratings
+                 if response.candidates and response.candidates[0].safety_ratings:
+                     safety_ratings_str = str(response.candidates[0].safety_ratings)
+             except Exception: pass # Ignore errors accessing safety ratings
+             st.warning(f"Gemini content generation might be blocked: {response.prompt_feedback}. Ratings: {safety_ratings_str}")
+             return f"Error: Content generation blocked by safety settings. Feedback: {response.prompt_feedback}. Ratings: {safety_ratings_str}"
         else:
              st.error("Received an unexpected response structure from Gemini.")
-             # Log the actual response if possible (be careful with sensitive data)
-             # st.write("Gemini Response:", response)
              return "Error: Could not process Gemini response."
 
     except Exception as e:
@@ -325,17 +374,15 @@ uploaded_file = st.file_uploader(
 
 # --- Processing Logic ---
 if uploaded_file is not None:
-    # Store filename only if it hasn't been processed yet or if it's a new file
-    # This check helps prevent reprocessing if the user interacts with UI elements
-    # causing a rerun without a new file upload.
+    new_upload = False
     if st.session_state.get("uploaded_filename") != uploaded_file.name:
-        # Clear previous results when a new file is uploaded
         keys_to_clear = ["transcript", "gemini_response"]
         for key in keys_to_clear:
             if key in st.session_state:
                 del st.session_state[key]
         st.session_state.uploaded_filename = uploaded_file.name
         st.info(f"New file uploaded: '{st.session_state.uploaded_filename}'. Previous results cleared.")
+        new_upload = True # Flag that it's a new file
 
     # Check if required keys are present based on input mode
     gemini_ready = bool(gemini_api_key)
@@ -347,13 +394,12 @@ if uploaded_file is not None:
 
         # --- Step 1: Get Transcript (only if not already in session state) ---
         if st.session_state.get("transcript") is None:
-            st.write("---") # Separator
-            temp_video_path = None # Initialize path variable
+            st.write("---")
+            temp_video_path = None
 
-            try: # Wrap the whole transcript generation process
+            try:
                 if input_mode == "Video File" and uploaded_file.type.startswith("video"):
                     st.info("Processing video file...")
-                    # Create temp file for video upload
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_video:
                         temp_video.write(uploaded_file.getvalue())
                         temp_video_path = temp_video.name
@@ -366,13 +412,10 @@ if uploaded_file is not None:
                         if not chunk_paths:
                             st.error("Audio extraction failed. Cannot proceed.")
                             status.update(label="Audio Extraction Failed ❌", state="error")
-                            # Stop only if extraction fails. Cleanup handled below in finally.
                             st.stop()
 
                         status.update(label=f"➡️ Step 2: Transcribing {len(chunk_paths)} audio chunk(s)...", state="running")
-                        # Transcription with integrated progress happens here
                         transcript_text = transcribe_with_openai_chunks(chunk_paths, openai_api_key)
-                        # Note: Chunk files are deleted inside transcribe_with_openai_chunks
 
                         if transcript_text is not None:
                             st.session_state.transcript = transcript_text
@@ -381,7 +424,6 @@ if uploaded_file is not None:
                         else:
                             st.error("Transcription failed.")
                             status.update(label="Transcription Failed ❌", state="error")
-                            # Stop if transcription fails. Cleanup handled below.
                             st.stop()
 
                 elif input_mode == "Transcript File":
@@ -394,10 +436,8 @@ if uploaded_file is not None:
                         else:
                              st.error("Failed to load transcript from file.")
                              st.stop()
-                # No 'else' needed here as file type check handles other cases
 
             finally:
-                 # Ensure temporary video file is always cleaned up if it was created
                  if temp_video_path and os.path.exists(temp_video_path):
                     try:
                         os.remove(temp_video_path)
@@ -407,52 +447,53 @@ if uploaded_file is not None:
 
 
         # --- Step 2: Display Transcript and Process with Gemini ---
-        transcript = st.session_state.get("transcript") # Use .get for safety
+        transcript = st.session_state.get("transcript")
 
-        if transcript is not None and transcript.strip(): # Check if transcript exists and is not just whitespace
+        if transcript is not None and transcript.strip():
             st.subheader("📜 Transcript Preview")
             st.text_area("Transcript Text", transcript, height=300, key="transcript_display")
 
-            st.write("---") # Separator
+            st.write("---")
 
-            # Show Mine button only if Gemini key is provided
             if gemini_ready:
+                # Only show the button if we have a transcript
                 if st.button("💎 Mine for Nuggets", key="mine_button"):
-                    st.session_state.gemini_response = None # Reset previous response
+                    st.session_state.gemini_response = None # Reset before calling
                     with st.spinner("🧠 Asking Gemini to find the marketing gold..."):
                         gemini_response_text = send_to_gemini(gemini_api_key, transcript)
-                        # Store response regardless of success/error message for display
-                        st.session_state.gemini_response = gemini_response_text
+                        st.session_state.gemini_response = gemini_response_text # Store result/error
                         if gemini_response_text and not gemini_response_text.startswith("Error:"):
                             st.toast("Gemini analysis complete! ✨")
                         else:
                              st.toast("Gemini analysis finished (potential issues found).", icon="⚠️")
-            elif transcript: # Transcript exists but no Gemini key
+            elif transcript:
                  st.warning("☝️ Enter your Google Gemini API key in the sidebar to analyze this transcript.")
 
 
-            # Display Gemini results if available in session state
             if st.session_state.get("gemini_response"):
-                st.subheader("✨ Nuggets Found!" if not st.session_state.gemini_response.startswith("Error:") else "⚠️ Gemini Response")
-                st.text_area("Marketing Nuggets" if not st.session_state.gemini_response.startswith("Error:") else "Gemini Output",
+                is_error_response = st.session_state.gemini_response.startswith("Error:")
+                st.subheader("✨ Nuggets Found!" if not is_error_response else "⚠️ Gemini Response")
+                st.text_area("Marketing Nuggets" if not is_error_response else "Gemini Output",
                              st.session_state.gemini_response,
                              height=400,
                              key="nuggets_display")
 
-                # Allow download even if it's an error message (for debugging)
                 st.download_button(
                     label="💾 Download Output",
-                    data=st.session_state.gemini_response.encode('utf-8'), # Encode to bytes
+                    data=st.session_state.gemini_response.encode('utf-8'),
                     file_name=f"nuggetminer_output_{os.path.splitext(st.session_state.uploaded_filename)[0]}.txt",
                     mime="text/plain"
                 )
 
         elif st.session_state.get("transcript") is not None: # Transcript exists but is empty/whitespace
              st.warning("The generated or loaded transcript appears to be empty or contains only whitespace.")
+        elif new_upload: # Only show processing message if it's a new file and transcript is still None
+             st.info("Processing transcript... Please wait.")
+
 
     else:
         # Warnings if keys are missing for the selected mode
-        st.write("---") # Separator
+        st.write("---")
         if input_mode == "Video File":
             if not whisper_ready:
                 st.warning("☝️ Please enter your OpenAI Whisper API key in the sidebar to process video files.")
@@ -463,9 +504,8 @@ if uploaded_file is not None:
                 st.warning("☝️ Please enter your Google Gemini API key in the sidebar to analyze transcript files.")
 
 elif not uploaded_file:
-    # Initial state message
     st.info("👈 Upload a file and provide API keys in the sidebar to get started.")
 
 # Add a footer or version in the sidebar
 st.sidebar.divider()
-st.sidebar.info("NuggetMiner v1.2")
+st.sidebar.info("NuggetMiner v1.3 (httpx debug)")
