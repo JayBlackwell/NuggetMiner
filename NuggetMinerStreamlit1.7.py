@@ -1,5 +1,5 @@
 import streamlit as st
-from openai import OpenAI
+import openai
 from moviepy.video.io.VideoFileClip import VideoFileClip
 import google.generativeai as genai
 import tempfile
@@ -31,7 +31,7 @@ def extract_audio(video_file):
 # --- Whisper via OpenAI API with chunking ---
 def transcribe_with_openai(audio_path, api_key):
     max_size_mb = 25
-    client = OpenAI(api_key=api_key)
+    openai.api_key = api_key
     audio = AudioSegment.from_file(audio_path)
     chunk_length_ms = 5 * 60 * 1000  # 5 minutes
     chunks = [audio[i:i+chunk_length_ms] for i in range(0, len(audio), chunk_length_ms)]
@@ -49,7 +49,7 @@ def transcribe_with_openai(audio_path, api_key):
 
             try:
                 with open(temp_chunk.name, "rb") as audio_file:
-                    response = client.audio.transcriptions.create(
+                    response = openai.audio.transcriptions.create(
                         model="whisper-1",
                         file=audio_file,
                         response_format="verbose_json"
@@ -207,4 +207,3 @@ if uploaded_file and gemini_api_key and (input_mode == "Transcript File" or open
             )
 else:
     st.warning("Please upload a file and enter the required API keys.")
-
