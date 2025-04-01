@@ -83,17 +83,17 @@ def transcribe_with_openai_chunks(chunk_paths, api_key):
     client = None
     try:
         # --- Debugging httpx Initialization (Optional - can be removed if stable) ---
-        st.write("--- Starting httpx Client Setup ---")
+        # st.write("--- Starting httpx Client Setup ---")
         # ... (Optional version checks using pkg_resources) ...
         # Initialize httpx client directly
-        st.write("Initializing httpx.Client(proxies=None, timeout=60.0)...")
+        # st.write("Initializing httpx.Client(proxies=None, timeout=60.0)...")
         custom_http_client = httpx.Client(proxies=None, timeout=60.0)
-        st.write("Custom httpx client created.")
-        st.write("--- End httpx Client Setup ---")
+        # st.write("Custom httpx client created.")
+        # st.write("--- End httpx Client Setup ---")
     except Exception as e:
         st.error(f"❌ Failed during httpx client creation.")
         st.exception(e)
-        st.write("--- End httpx Client Setup ---")
+        # st.write("--- End httpx Client Setup ---")
         # Cleanup chunks if client creation fails
         for chunk_path, _ in chunk_paths:
             if os.path.exists(chunk_path):
@@ -105,7 +105,7 @@ def transcribe_with_openai_chunks(chunk_paths, api_key):
     try:
         try:
             client = OpenAI(api_key=api_key, http_client=custom_http_client)
-            st.write("OpenAI client initialized.")
+            # st.write("OpenAI client initialized.")
         except Exception as e_openai:
             st.error("❌ Failed to initialize OpenAI client.")
             st.exception(e_openai)
@@ -130,7 +130,7 @@ def transcribe_with_openai_chunks(chunk_paths, api_key):
              current_chunk_number = idx + 1
              progress_text = f"Transcribing chunk {current_chunk_number}/{total_chunks}..."
              progress_bar.progress(processed_chunks / total_chunks, text=progress_text)
-             st.write(f"Sending chunk {current_chunk_number} ({os.path.basename(chunk_path)}) to Whisper...")
+             # st.write(f"Sending chunk {current_chunk_number} ({os.path.basename(chunk_path)}) to Whisper...") # Less verbose
 
              try:
                  if not os.path.exists(chunk_path):
@@ -153,10 +153,13 @@ def transcribe_with_openai_chunks(chunk_paths, api_key):
                      segment_text = segment.get('text', '').strip()
                      start_str = time.strftime('%H:%M:%S', time.gmtime(segment_start_abs))
                      end_str = time.strftime('%H:%M:%S', time.gmtime(segment_end_abs))
-                     all_formatted_lines.append(f"[{start_str} --> {end_str}] {segment_text}")
-                 st.write(f"Chunk {current_chunk_number} transcribed successfully.")
+                     # Ensure text exists before adding line
+                     if segment_text:
+                        all_formatted_lines.append(f"[{start_str} --> {end_str}] {segment_text}")
 
+                 # st.write(f"Chunk {current_chunk_number} transcribed successfully.") # Less verbose
                  processed_chunks += 1
+                 # Update progress bar here to ensure it reflects actual progress even if segment processing is quick
                  progress_bar.progress(processed_chunks / total_chunks, text=progress_text)
 
              except Exception as e:
@@ -186,7 +189,7 @@ def transcribe_with_openai_chunks(chunk_paths, api_key):
         if custom_http_client:
             try:
                 custom_http_client.close()
-                st.write("Custom httpx client closed.")
+                # st.write("Custom httpx client closed.") # Less verbose
             except Exception as e_close:
                 st.warning(f"Error closing httpx client: {e_close}")
 
@@ -204,7 +207,7 @@ def load_transcript_text(uploaded_file):
         output_lines = []
 
         if file_ext in ['.vtt', '.srt']:
-            st.write(f"Parsing {file_ext} file format...")
+            # st.write(f"Parsing {file_ext} file format...") # Less verbose
             i = 0
             while i < len(lines):
                 # ... (VTT/SRT parsing logic as in previous version) ...
@@ -220,14 +223,14 @@ def load_transcript_text(uploaded_file):
                      while i < len(lines) and lines[i].strip() and '-->' not in lines[i] and not lines[i].strip().isdigit():
                          text_parts.append(lines[i].strip())
                          i += 1
-                     full_text = " ".join(text_parts)
-                     if full_text:
+                     full_text = " ".join(text_parts).strip() # Added strip here
+                     if full_text: # Check if text exists after join/strip
                           output_lines.append(f"[{start_time} --> {end_time}] {full_text}")
                      continue
                  i += 1
-            st.write(f"Finished parsing {file_ext}. Found {len(output_lines)} segments.")
+            # st.write(f"Finished parsing {file_ext}. Found {len(output_lines)} segments.") # Less verbose
         elif file_ext == '.txt':
-            st.write("Processing plain .txt file...")
+            # st.write("Processing plain .txt file...") # Less verbose
             output_lines = [line.strip() for line in lines if line.strip()]
         else:
             st.warning(f"Unsupported file extension for transcript loading: {file_ext}")
@@ -244,7 +247,7 @@ def send_to_gemini(api_key, transcript_text):
     """Sends transcript to Gemini API and returns the response text."""
     try:
         genai.configure(api_key=api_key)
-        # ... (Gemini system prompt as in previous version) ...
+        # --- MODIFIED SYSTEM PROMPT ---
         system_prompt = """
 You are a marketing specialist reviewing a webinar transcript (Golf Genius Golf Shop product). Your task is to extract valuable marketing content:
 
@@ -259,12 +262,18 @@ You are a marketing specialist reviewing a webinar transcript (Golf Genius Golf 
 *   Use bullet points for each extracted nugget.
 *   Focus *only* on repurposable marketing content. Ignore introductions, filler, off-topic chat.
 
+**Exclusions:**
+*   Do NOT include any quotes, testimonials, or insights that are attributed to Bart Rickard or Brian Morrison.
+
 Example Output:
 *   [Around 00:15:10] Jane Smith: "The Golf Shop product dramatically reduced our inventory reconciliation time."
 *   [Around 00:28:45] A speaker highlighted how the special order tracking saved them hours each week.
 """
+        # --- END OF MODIFIED SYSTEM PROMPT ---
+
         model = genai.GenerativeModel(
-             model_name="gemini-2.5-pro-exp-03-25", system_instruction=system_prompt
+             model_name="gemini-1.5-flash", # Changed model name back for stability/cost? Revert if needed.
+             system_instruction=system_prompt
         )
         response = model.generate_content(
             transcript_text, generation_config={"temperature": 0.7}
@@ -321,12 +330,11 @@ with st.sidebar:
             if key in st.session_state:
                 del st.session_state[key]
 
-        # --- REMOVED direct modification of file_uploader state ---
-
-        st.rerun() # Rerun the script
+        # Rerun the script - This implicitly clears the file uploader state visually
+        st.rerun()
 
     st.divider()
-    st.info("NuggetMiner v1") # Updated version
+    st.info("NuggetMiner v1.7 (Exclude Speakers)") # Updated version
 
 # Main area for file upload and results
 st.header("📤 Upload Your File")
@@ -360,16 +368,15 @@ if uploaded_file is not None:
     if (can_process_video or can_process_transcript):
         # --- Step 1: Get Transcript (if not already processed) ---
         if st.session_state.get("transcript") is None:
-            st.write("---")
+            st.write("---") # Separator only when processing starts
             temp_video_path = None
             try:
                 if current_input_mode == "Video File":
-                    # ... (Video processing logic as before) ...
                     st.info("Processing video file...")
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_video:
                          temp_video.write(uploaded_file.getvalue())
                          temp_video_path = temp_video.name
-                         st.write(f"Temporary video file created: {temp_video_path}")
+                         # st.write(f"Temporary video file created: {temp_video_path}") # Less verbose
 
                     with st.status("🜚 Processing Video...", expanded=True) as status:
                          status.update(label="➡️ Step 1: Extracting audio chunks...", state="running")
@@ -390,7 +397,6 @@ if uploaded_file is not None:
                              st.stop()
 
                 elif current_input_mode == "Transcript File":
-                    # ... (Transcript loading logic as before) ...
                      st.info(f"Loading transcript file: {uploaded_file.name}")
                      with st.spinner("Reading transcript..."):
                          transcript_text = load_transcript_text(uploaded_file)
@@ -398,26 +404,28 @@ if uploaded_file is not None:
                               st.session_state.transcript = transcript_text
                               st.toast("Transcript loaded ✅")
                          else:
+                              # Error message shown in function
                               st.stop()
             finally:
                 # Cleanup temp video file
                 if temp_video_path and os.path.exists(temp_video_path):
                     try:
                         os.remove(temp_video_path)
-                        st.write(f"Cleaned up temporary video file: {temp_video_path}")
+                        # st.write(f"Cleaned up temporary video file: {temp_video_path}") # Less verbose
                     except OSError as e:
                         st.warning(f"Could not remove temp video file {temp_video_path}: {e}")
 
         # --- Step 2: Display Transcript and Process with Gemini ---
         transcript = st.session_state.get("transcript")
         if transcript is not None and transcript.strip():
-            # ... (Display transcript and Gemini button/results logic as before) ...
             st.subheader("🜚 Transcript Preview")
             st.text_area("Transcript Text", transcript, height=300, key="transcript_display")
             st.write("---")
             if gemini_ready:
+                 # Add unique key to avoid button state issues across reruns if needed,
+                 # but "mine_button" might be sufficient if only shown once per transcript load.
                  if st.button("🜚 Mine for Nuggets", key="mine_button"):
-                     st.session_state.gemini_response = None
+                     st.session_state.gemini_response = None # Reset before call
                      with st.spinner("🜚 Asking Gemini to find the marketing gold..."):
                          gemini_response_text = send_to_gemini(gemini_api_key, transcript)
                          st.session_state.gemini_response = gemini_response_text
@@ -428,6 +436,7 @@ if uploaded_file is not None:
             else:
                   st.warning("☝️ Enter your Google Gemini API key in the sidebar to analyze this transcript.")
 
+            # Display results if they exist
             if st.session_state.get("gemini_response"):
                  is_error_response = st.session_state.gemini_response.startswith("Error:")
                  st.subheader("✨ Nuggets Found!" if not is_error_response else "⚠️ Gemini Response")
@@ -438,11 +447,12 @@ if uploaded_file is not None:
                      file_name=f"nuggetminer_output_{os.path.splitext(st.session_state.uploaded_filename)[0]}.txt",
                      mime="text/plain"
                  )
-        elif st.session_state.get("transcript") is not None:
+        elif st.session_state.get("transcript") is not None: # Transcript processed but empty
              st.warning("The generated or loaded transcript appears to be empty.")
+        # If transcript is None, it means processing failed or hasn't started, so no message needed here.
 
     else:
-        # ... (Prerequisite warning logic as before) ...
+        # Prerequisites not met
         st.write("---")
         st.warning(f"☝️ Please ensure prerequisites are met for the selected '{current_input_mode}' mode:")
         if current_input_mode == "Video File":
@@ -452,6 +462,7 @@ if uploaded_file is not None:
               if not gemini_ready: st.error("   - Google Gemini API key is missing.")
 
 elif not uploaded_file:
+    # Initial state - no file uploaded yet
     st.info("👈 Upload a file and provide API keys in the sidebar to get started.")
 
 # --- End of Script ---
