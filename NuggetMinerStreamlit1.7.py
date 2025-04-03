@@ -249,7 +249,7 @@ def send_to_gemini(api_key, transcript_text):
         genai.configure(api_key=api_key)
         # --- MODIFIED SYSTEM PROMPT ---
         system_prompt = """
-You are a marketing specialist reviewing a webinar transcript (Golf Genius Golf Shop product). Your task is to extract valuable marketing content:
+You are a marketing specialist reviewing a video transcript (presented by Golf Genius. They have several products. The products are Tournament Management, Golf Shop, Coach Now, and Operation 36).  Your task is to extract valuable marketing content:
 
 *   **Direct Testimonials:** Quotes from named speakers praising the product/features.
 *   **Benefit Highlights:** Positive quotes showing specific advantages or results.
